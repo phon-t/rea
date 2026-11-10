@@ -1,13 +1,25 @@
 import { lstat, readdir } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 
 import type { DesktopApplicationInventory } from "../domain/desktop/desktopCapture.js";
+import { isMissingProbe } from "./HostFileRead.js";
 
 /** The environment whose XDG folders, and the home whose dot-folders, may hold the application's state. */
 interface StateLocations {
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly home: string;
 }
+
+/**
+ * An XDG base directory: the variable's value when it names an absolute
+ * path, else the home default. A relative value is ignored, as the XDG
+ * specification requires: a relative base would resolve under the caller's
+ * working directory instead of the home.
+ */
+export const xdgBase = (
+  value: string | undefined,
+  fallback: string,
+): string => (value !== undefined && isAbsolute(value) ? value : fallback);
 
 /**
  * Names the application's state folders may carry, including the entry's
@@ -53,6 +65,20 @@ const recasedEntries = async (
     .map((entry) => join(folder, entry));
 
 /**
+ * Whether a state folder existed before the capture: null when the probe
+ * itself could not be answered. Only a missing path establishes absence; a
+ * denied probe must not report an existing folder as absent.
+ */
+const existsAtStart = async (path: string): Promise<boolean | null> => {
+  try {
+    await lstat(path);
+    return true;
+  } catch (cause: unknown) {
+    return isMissingProbe(cause) ? false : null;
+  }
+};
+
+/**
  * Folder names under XDG and dot-directories where the application may keep
  * state, KDE's `<name>rc` settings file in the config folder, and the
  * dotfiles in the home named after it, which an application may only read
@@ -64,10 +90,10 @@ export const stateDirectories = async (
   extra: readonly string[],
 ): Promise<DesktopApplicationInventory["state_directories"]> => {
   const bases = [
-    environment.XDG_CONFIG_HOME || join(home, ".config"),
-    environment.XDG_DATA_HOME || join(home, ".local/share"),
-    environment.XDG_STATE_HOME || join(home, ".local/state"),
-    environment.XDG_CACHE_HOME || join(home, ".cache"),
+    xdgBase(environment.XDG_CONFIG_HOME, join(home, ".config")),
+    xdgBase(environment.XDG_DATA_HOME, join(home, ".local/share")),
+    xdgBase(environment.XDG_STATE_HOME, join(home, ".local/state")),
+    xdgBase(environment.XDG_CACHE_HOME, join(home, ".cache")),
   ];
   const variants = new Set(
     names
@@ -104,7 +130,7 @@ export const stateDirectories = async (
   return Promise.all(
     [...paths].map(async (path) => ({
       path,
-      exists_at_start: (await lstat(path).catch(() => undefined)) !== undefined,
+      exists_at_start: await existsAtStart(path),
     })),
   );
 };

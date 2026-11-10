@@ -327,12 +327,12 @@ const capturedStateAliases = (
       const state = index < 0 ? undefined : roots[index]?.path;
       const alias = relative(path);
       const target = state === undefined ? null : relative(state);
+      // The alias only exists when the selection's physical path is a walked
+      // state directory, so an unrecorded kind is a directory, not an
+      // unknown leaf: without it the emitted alias dangles when the seed
+      // is empty and a write through it fails with ENOENT.
       const recorded: "file" | "directory" | "unknown" =
-        kind === "directory"
-          ? "directory"
-          : kind === "file"
-            ? "file"
-            : "unknown";
+        kind === "file" ? "file" : "directory";
       return alias === null || target === null || alias === target
         ? []
         : [{ alias, target, kind: recorded }];

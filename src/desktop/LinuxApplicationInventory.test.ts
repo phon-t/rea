@@ -352,6 +352,45 @@ describe.skipIf(process.platform === "win32")(
 );
 
 describe.skipIf(process.platform === "win32")(
+  "unresolved state directory probes",
+  () => {
+    it
+      .skipIf(process.getuid?.() === 0)(
+      "keeps a state folder under a denied parent unresolved instead of absent",
+      async () => {
+        const { home, environment } = await fixture();
+        await mkdir(join(home, ".config/notes"), { recursive: true });
+        await chmod(join(home, ".config"), 0o000);
+        try {
+          const probe = await stat(join(home, ".config/notes")).then(
+            () => undefined,
+            (cause: unknown) => cause,
+          );
+          expect(probe).toMatchObject({ code: "EACCES" });
+          const inventory = await inventoryOf("org.example.notes", {
+            home,
+            environment,
+          });
+          const entries = inventory.state_directories;
+          // The folder exists; a denied probe must not report it absent.
+          expect(entries).toContainEqual({
+            path: join(home, ".config/notes"),
+            exists_at_start: null,
+          });
+          // A folder under a readable parent is still established absent.
+          expect(entries).toContainEqual({
+            path: join(home, ".local/share/notes"),
+            exists_at_start: false,
+          });
+        } finally {
+          await chmod(join(home, ".config"), 0o755);
+        }
+      },
+    );
+  },
+);
+
+describe.skipIf(process.platform === "win32")(
   "remaining desktop file id controls",
   () => {
     it("ignores an unreadable sibling that cannot encode the requested ID", async () => {
@@ -723,6 +762,79 @@ describe.skipIf(process.platform === "win32")(
           },
         ]),
       );
+    });
+  },
+);
+
+describe.skipIf(process.platform === "win32")(
+  "inspectLinuxApplication relative XDG bases",
+  () => {
+    it("ignores relative XDG bases and falls back to the home defaults", async () => {
+      const { home, bin } = await fixture();
+
+      const inspected = await inspectLinuxApplication({
+        desktopEntry: undefined,
+        executable: "notes-app",
+        arguments: [],
+        environment: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          XDG_CONFIG_HOME: "relative-config",
+          XDG_DATA_HOME: "relative-data",
+          XDG_STATE_HOME: "relative-state",
+          XDG_CACHE_HOME: "relative-cache",
+        },
+        home,
+        callerDirectory: home,
+      });
+
+      if (!inspected.ok) throw new Error(inspected.error.reason);
+      const paths = inspected.value.inventory.state_directories.map(
+        (entry) => entry.path,
+      );
+      // A relative base is ignored, not resolved under REA's working directory.
+      for (const path of paths) expect(path.startsWith(`${home}/`)).toBe(true);
+      expect(paths).toContain(join(home, ".config/notes-app"));
+      expect(paths).toContain(join(home, ".local/share/notes-app"));
+    });
+
+    it("finds a desktop entry under the home default when XDG_DATA_HOME is relative", async () => {
+      const installed = await fixture();
+      const { home } = installed;
+      await mkdir(join(home, ".local/share/applications"), { recursive: true });
+      await writeFile(
+        join(home, ".local/share/applications/notes.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Notes\nExec=notes-app\n",
+      );
+
+      const inventory = await inventoryOf("notes", {
+        home,
+        environment: {
+          ...installed.environment,
+          XDG_DATA_HOME: "relative-data",
+        },
+      });
+
+      expect(inventory.desktop_entry).toMatchObject({
+        id: "notes",
+        name: "Notes",
+        path: join(home, ".local/share/applications/notes.desktop"),
+      });
+    });
+
+    it("ignores a relative XDG_CONFIG_HOME an Exec env prefix sets", async () => {
+      const installed = await fixture();
+      const { home } = installed;
+      await mkdir(join(home, ".local/share/applications"), { recursive: true });
+      await writeFile(
+        join(home, ".local/share/applications/org.example.relative.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Relative\nExec=env XDG_CONFIG_HOME=relative-config notes-app\n",
+      );
+
+      const inventory = await inventoryOf("org.example.relative", installed);
+
+      const paths = inventory.state_directories.map((entry) => entry.path);
+      for (const path of paths) expect(path.startsWith(`${home}/`)).toBe(true);
+      expect(paths).toContain(join(home, ".config/notes-app"));
     });
   },
 );

@@ -467,11 +467,14 @@ it.each(["directory", "file", undefined] as const)(
       } as unknown as DesktopApplicationCapture,
       { paths: [] } as unknown as DesktopApplicationState,
     );
+    // The alias only exists for a walked state directory, so an unrecorded
+    // kind is a directory: the emitted alias must create its target when
+    // the seed is empty, or a write through it fails with ENOENT.
     expect(files.stateAliases).toEqual([
       {
         alias: "settings",
         target: ".config/notes",
-        kind: kind ?? "unknown",
+        kind: kind ?? "directory",
       },
     ]);
   },

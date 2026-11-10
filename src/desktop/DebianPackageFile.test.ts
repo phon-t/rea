@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -121,6 +121,37 @@ describe("inspectPackageFile", () => {
       package_file_reason: `${join(folder, "a.deb")} is not a regular file`,
     });
   });
+
+  it
+    .skipIf(process.getuid?.() === 0)(
+    "keeps a denied package file unresolved instead of not a regular file",
+    async () => {
+      const folder = await createTestTempDirectory("desktop-deb-");
+      const blocked = join(folder, "blocked");
+      await mkdir(blocked, { recursive: true });
+      const path = join(blocked, "varicad2026-en_2.03_amd64.deb");
+      await writeFile(path, BYTES);
+      await chmod(blocked, 0o000);
+      try {
+        const probe = await stat(path).then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+        expect(probe).toMatchObject({ code: "EACCES" });
+        const facts = await inspectPackageFile(
+          path,
+          INSTALLED,
+          async () => ({ stdout: DPKG_DEB_OUTPUT, exitCode: 0 }),
+          undefined,
+        );
+        expect(facts.package_file_reason).toContain(
+          `${path} could not be checked: EACCES: permission denied`,
+        );
+      } finally {
+        await chmod(blocked, 0o755);
+      }
+    },
+  );
 });
 
 const hasDpkgDeb =

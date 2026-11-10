@@ -19,7 +19,7 @@ import {
   observeStableFile,
   stableFileHashCause,
 } from "../filesystem/StableFileHash.js";
-import { isHostFile, isRefusedRead } from "./HostFileRead.js";
+import { isRefusedRead, probeHostFile } from "./HostFileRead.js";
 import type { QueryRunner } from "./HostQuery.js";
 
 type PackageFileFacts = Pick<
@@ -86,7 +86,12 @@ export const inspectPackageFile = async (
     return refused(
       `dpkg reports no installed version of the application (${installed.kind}${installed.name === null ? "" : ` ${installed.name}`}), so ${path} was not matched against it`,
     );
-  if (!(await isHostFile(path)))
+  const probed = await probeHostFile(path);
+  if (!probed.ok)
+    return refused(
+      `${path} could not be checked: ${probed.error instanceof Error ? probed.error.message : String(probed.error)}`,
+    );
+  if (probed.value !== "file")
     return refused(`${path} is not a regular file`);
   // dpkg-deb and the hash read the file apart; its identity must hold across both.
   const before = await stat(path).catch(() => undefined);

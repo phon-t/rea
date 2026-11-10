@@ -14,12 +14,13 @@ import {
   type AptSourceStanza,
 } from "../domain/desktop/aptRepositories.js";
 import type { AptRepository } from "../domain/desktop/desktopCapture.js";
+import { ok, type Result } from "../domain/result.js";
 import {
   withGpgvKeyCheck,
   type HeldKey,
   type VerifiedKey,
 } from "./GpgvKeyCheck.js";
-import { isHostFile, readHostFile } from "./HostFileRead.js";
+import { probeHostFile, readHostFile } from "./HostFileRead.js";
 import { succeeded, type QueryRunner } from "./HostQuery.js";
 
 /** Where apt keeps its trusted keys and downloaded lists. */
@@ -148,19 +149,26 @@ const candidateKeys = async (
   ];
 };
 
-/** The index's signed release beside it in apt's lists folder: InRelease, or Release.gpg with the Release it signs. */
+/** The index's signed release beside it in apt's lists folder: InRelease, or Release.gpg with the Release it signs. A probe that fails for another reason stays unresolved, rather than being read as no signed release file. */
 const signedRelease = async (
   target: AptIndexTarget,
-): Promise<readonly string[] | undefined> => {
+): Promise<Result<readonly string[] | undefined, unknown>> => {
   const prefix = join(
     dirname(target.filename),
     aptListFileName(target.baseUri),
   );
-  if (await isHostFile(`${prefix}InRelease`)) return [`${prefix}InRelease`];
-  return (await isHostFile(`${prefix}Release.gpg`)) &&
-    (await isHostFile(`${prefix}Release`))
-    ? [`${prefix}Release.gpg`, `${prefix}Release`]
-    : undefined;
+  const inRelease = await probeHostFile(`${prefix}InRelease`);
+  if (!inRelease.ok) return inRelease;
+  if (inRelease.value === "file") return ok([`${prefix}InRelease`]);
+  const releaseGpg = await probeHostFile(`${prefix}Release.gpg`);
+  if (!releaseGpg.ok) return releaseGpg;
+  const release = await probeHostFile(`${prefix}Release`);
+  if (!release.ok) return release;
+  return ok(
+    releaseGpg.value === "file" && release.value === "file"
+      ? [`${prefix}Release.gpg`, `${prefix}Release`]
+      : undefined,
+  );
 };
 
 /** The keys gpgv checks a release with: candidate key files, or the one key the sources entry holds. */
@@ -200,20 +208,24 @@ const keyCheck = async (
       reason: `no sources entry at ${target.sourcesFile}:${String(target.position)} configures it`,
     };
   const release = await signedRelease(target);
-  if (release === undefined)
+  if (!release.ok)
+    return {
+      reason: `the signed release file for it in ${dirname(target.filename)} could not be checked: ${release.error instanceof Error ? release.error.message : String(release.error)}`,
+    };
+  if (release.value === undefined)
     return {
       reason: `apt holds no signed release file for it in ${dirname(target.filename)}`,
     };
   // apt trusts only the key an entry holds, never the keys it trusts for all repositories.
   if (entry.inlineKey !== null)
     return {
-      release,
+      release: release.value,
       candidates: { path: entry.file, bytes: Buffer.from(entry.inlineKey) },
     };
   const candidates = await candidateKeys(entry, context.apt);
   return candidates.length > MAX_CANDIDATE_KEYS
     ? { reason: `more than ${String(MAX_CANDIDATE_KEYS)} candidate keys` }
-    : { release, candidates };
+    : { release: release.value, candidates };
 };
 
 /** A repository's facts from apt's index target and the sources entry it names, before its key is checked. */

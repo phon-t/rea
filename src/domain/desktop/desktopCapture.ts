@@ -271,7 +271,8 @@ export const desktopApplicationInventorySchema = z.strictObject({
   state_directories: z.array(
     z.strictObject({
       path: z.string().min(1),
-      exists_at_start: z.boolean(),
+      /** Whether the folder existed before the capture; null when the probe itself could not be answered. */
+      exists_at_start: z.boolean().nullable(),
     }),
   ),
 });

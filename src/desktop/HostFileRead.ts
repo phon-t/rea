@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 
 import { AnalysisCleanupLease } from "../artifacts/AnalysisCleanupLease.js";
 import { ArtifactFileCleanupFailure } from "../artifacts/ArtifactFileOperation.js";
+import { err, ok, type Result } from "../domain/result.js";
 import {
   RegularFileCleanupFailure,
   withOwnedRegularFile,
@@ -67,6 +68,32 @@ export const readHostFile = async (
   }
 };
 
+/** Whether a failed identity probe means the path names nothing, rather than a probe that could not be answered. Only a missing path establishes absence. */
+export const isMissingProbe = (cause: unknown): boolean => {
+  const code = (cause as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+};
+
+/** What a host identity probe established: a regular file, something else, or nothing there. */
+export type HostFileKind = "file" | "other" | "absent";
+
+/**
+ * A host path's identity as its probe could establish it; a probe that
+ * fails for another reason stays unresolved with its cause, rather than
+ * being read as a confirmed absence.
+ */
+export const probeHostFile = async (
+  path: string,
+): Promise<Result<HostFileKind, unknown>> => {
+  try {
+    return ok((await stat(path)).isFile() ? "file" : "other");
+  } catch (cause: unknown) {
+    return isMissingProbe(cause) ? ok("absent") : err(cause);
+  }
+};
+
 /** Whether a host path names a regular file, following links. */
-export const isHostFile = async (path: string): Promise<boolean> =>
-  (await stat(path).catch(() => undefined))?.isFile() === true;
+export const isHostFile = async (path: string): Promise<boolean> => {
+  const probed = await probeHostFile(path);
+  return probed.ok && probed.value === "file";
+};

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -367,6 +367,55 @@ it("restores a selected alias when the state directory has no files", async () =
   );
   expect(module).toContain("_ensure_state_aliases(Path.home())");
   expect(module).toContain('("settings", ".config/notes", "directory")');
+});
+
+it("restores a selected alias with no recorded kind when the seed is empty", async () => {
+  const local = capture();
+  const physical = `${HOME}/.config/notes`;
+  const { result, directory } = await exportCapture({
+    ...local,
+    state: {
+      ...local.state,
+      content_roots: [physical],
+      state_directories: [physical, `${HOME}/.local/share/notes`],
+      // Captures written before the selection's kind was recorded omit it;
+      // the alias still points at a state directory, so the emitted alias
+      // must create its target or a write through it fails with ENOENT.
+      selected_paths: [{ path: `${HOME}/settings`, physical }],
+      checkpoints: [checkpoint("baseline", "baseline", [], [])],
+    },
+  });
+  if (result instanceof Error) throw result;
+  expect(await exportedAliases(directory)).toEqual([
+    ["settings", ".config/notes", "directory"],
+  ]);
+
+  // Run the emitted module's helpers without importing the app framework
+  // or defining/launching the computer app class.
+  const scratch = await createTestTempDirectory("desktop-export-");
+  const home = join(scratch, "home");
+  await mkdir(home, { recursive: true });
+  const driver = join(scratch, "restore.py");
+  await writeFile(
+    driver,
+    `import ast, sys
+from pathlib import Path
+source = Path(sys.argv[1])
+tree = ast.parse(source.read_text(), str(source))
+tree.body = [node for node in tree.body if not isinstance(node, ast.ClassDef) and not (isinstance(node, ast.ImportFrom) and (node.module or "").startswith("agentenv_protocol"))]
+exec(compile(tree, str(source), "exec"), globals())
+_seed_home(Path(sys.argv[2]))
+_ensure_state_aliases(Path(sys.argv[2]))
+Path(sys.argv[2], "settings", "new.ini").write_text("new settings")
+`,
+  );
+  await execute(
+    process.platform === "win32" ? "python" : "python3",
+    ["-I", "-B", driver, join(directory, "envs/notes/notes_app.py"), home],
+  );
+  expect(
+    await readFile(join(home, ".config", "notes", "new.ini"), "utf8"),
+  ).toBe("new settings");
 });
 
 it.each(["settings/notes", "chosen/notes"])(

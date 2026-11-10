@@ -72,6 +72,18 @@ describe("desktopApplicationInventorySchema", () => {
     );
   });
 
+  it("reads an unresolved state folder existence as null", () => {
+    expect(
+      desktopApplicationInventorySchema.safeParse({
+        ...inventory({}),
+        state_directories: [
+          { path: "/home/ada/.config/notes", exists_at_start: null },
+          { path: "/home/ada/.config/other", exists_at_start: false },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
   it("refuses a package file name that is a path or a parent folder", () => {
     for (const name of ["../varicad.deb", "..", "debs/varicad.deb", ""])
       expect(
